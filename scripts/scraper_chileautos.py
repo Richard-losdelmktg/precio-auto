@@ -14,7 +14,7 @@ SEARCH_API = f"{BASE}/_api/search-core/"
 DETAILS_API = f"{BASE}/_api/details-core/"
 QUERY_BASE = "(And.(C.Category.autos.)_.State.Usado.)"
 
-OUT_PATH = Path(__file__).parent / "datos_scraped_chileautos.json"
+OUT_PATH = Path(__file__).resolve().parent.parent / "data" / "datos_scraped_chileautos.json"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -142,10 +142,14 @@ def normalise(nid, url, tracking, details):
     seller = SELLER_MAP.get((t.get("sellertype") or "").strip().lower())
     region = (t.get("state") or "").strip().title() or None
     body   = (t.get("bodystyle") or "").strip().title() or None
+    version = (t.get("badge") or "").strip().lower() or None      # version/trim del vehiculo
+    pub    = (t.get("publishDate") or "").strip() or None         # fecha de publicacion del aviso
+    color  = (t.get("colour") or "").strip().title() or None
     return {
-        "Marca": make, "Modelo": model, "Ano": year, "Kilometraje": km,
-        "price": price, "Combustible": fuel, "Transmision": trans,
+        "Marca": make, "Modelo": model, "Version": version, "Ano": year,
+        "Kilometraje": km, "price": price, "Combustible": fuel, "Transmision": trans,
         "Tipo_de_vendedor": seller, "location": region, "Category": body,
+        "Color": color, "publish_date": pub, "seller_id": t.get("sellerId"),
         "source_id": nid, "url": url,
         "scraped_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -216,8 +220,18 @@ def scrape(target=3000):
     log(f"\n=== IDs recolectados: {len(seen_ids)} ===")
     log("=== Obteniendo detalles de cada auto... ===")
 
+    # Reanudacion incremental: cargar lo ya scrapeado y saltar esos ids
     results = []
-    refs = list(seen_ids.values())
+    done_ids = set()
+    if OUT_PATH.exists():
+        try:
+            results = json.loads(OUT_PATH.read_text(encoding="utf-8"))
+            done_ids = {r["source_id"] for r in results if "Version" in r}  # re-scrapear los viejos sin Version
+            log(f"  Reanudando: {len(done_ids)} ya scrapeados con formato nuevo")
+        except Exception:
+            pass
+    results = [r for r in results if r["source_id"] in done_ids]
+    refs = [r for r in seen_ids.values() if r["networkId"] not in done_ids]
     for i, ref in enumerate(refs, 1):
         nid = ref["networkId"]
         if i % 50 == 0:

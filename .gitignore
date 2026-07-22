@@ -13,3 +13,7 @@ Thumbs.db
 
 # Entornos / secretos
 .env
+
+# Logs de scraping (locales, no forman parte del dataset)
+data/scrape_log.txt
+data/scrape_yapo_log.txt
