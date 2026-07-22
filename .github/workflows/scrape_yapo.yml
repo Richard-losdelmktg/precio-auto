@@ -29,6 +29,6 @@ jobs:
         run: |
           git config user.name "scraper-bot"
           git config user.email "actions@users.noreply.github.com"
-          git add data/datos_scraped_yapo.json
+          git add data/datos_scraped_yapo.json data/yapo_scrape_state.json
           git diff --cached --quiet && echo "sin cambios" || git commit -m "scraper: actualiza datos Yapo [skip ci]"
           git push

@@ -14,6 +14,7 @@ import requests
 
 BASE = "https://www.yapo.cl"
 OUT_PATH = Path(__file__).resolve().parent.parent / "data" / "datos_scraped_yapo.json"
+STATE_PATH = Path(__file__).resolve().parent.parent / "data" / "yapo_scrape_state.json"
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml",
@@ -87,25 +88,43 @@ def scrape(target=12000, max_pages=1148):
     def save():
         OUT_PATH.write_text(json.dumps(results, ensure_ascii=False, indent=1), encoding="utf-8")
 
-    # Fase 1: recolectar URLs de avisos desde el listado paginado
-    ad_urls, page, empty = {}, 1, 0
-    while page <= max_pages and len(done) + len(ad_urls) < target * 1.15:
+    # Fase 1: recolectar URLs de avisos desde el listado paginado.
+    # El listado esta ordenado "mas reciente primero": si se reiniciara siempre
+    # en la pagina 1, en corridas repetidas esas paginas quedarian saturadas de
+    # avisos ya guardados y el corte por "paginas vacias" terminaria demasiado
+    # pronto sin llegar a las paginas mas antiguas que si tienen avisos nuevos.
+    # Por eso se guarda un checkpoint y cada corrida continua donde quedo la
+    # anterior (con vuelta a la pagina 1 al llegar al final del listado).
+    start_page = 1
+    if STATE_PATH.exists():
+        try: start_page = json.loads(STATE_PATH.read_text(encoding="utf-8")).get("last_page", 1)
+        except Exception: pass
+    log(f"Fase 1 desde pagina {start_page}")
+
+    ad_urls, page, empty, scanned = {}, start_page, 0, 0
+    while scanned <= max_pages and len(done) + len(ad_urls) < target * 1.15:
         u = f"{BASE}/autos-usados.{page}" if page > 1 else f"{BASE}/autos-usados"
         h = get(u, s)
-        if not h: empty += 1; page += 1; continue
-        found = 0
-        for m in AD_RE.finditer(h):
-            aid = m.group(2)
-            if aid not in done and aid not in ad_urls:
-                ad_urls[aid] = BASE + m.group(1); found += 1
-        if found == 0:
+        if not h:
             empty += 1
-            if empty >= 5: log(f"5 paginas sin avisos nuevos — fin listado en p.{page}"); break
-        else: empty = 0
-        if page % 25 == 0: log(f"  listado p.{page} | urls nuevas: {len(ad_urls)}")
-        page += 1
+        else:
+            found = 0
+            for m in AD_RE.finditer(h):
+                aid = m.group(2)
+                if aid not in done and aid not in ad_urls:
+                    ad_urls[aid] = BASE + m.group(1); found += 1
+            empty = 0 if found else empty + 1
+            if empty >= 40:
+                log(f"40 paginas sin avisos nuevos — fin real del listado en p.{page}")
+                page = 1; scanned += 1; empty = 0
+                STATE_PATH.write_text(json.dumps({"last_page": 1}), encoding="utf-8")
+                continue
+        scanned += 1
+        if scanned % 25 == 0: log(f"  listado p.{page} | urls nuevas: {len(ad_urls)}")
+        page = page + 1 if page < max_pages else 1
+        STATE_PATH.write_text(json.dumps({"last_page": page}), encoding="utf-8")
         time.sleep(DELAY)
-    log(f"Fase 1 lista: {len(ad_urls)} avisos nuevos por descargar")
+    log(f"Fase 1 lista: {len(ad_urls)} avisos nuevos por descargar (checkpoint: pagina {page})")
 
     # Fase 2: detalle de cada aviso
     for i, (aid, url) in enumerate(ad_urls.items(), 1):
