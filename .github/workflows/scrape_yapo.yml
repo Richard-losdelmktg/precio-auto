@@ -8,10 +8,15 @@ on:
 permissions:
   contents: write
 
+# Evita que dos corridas (cron + manual) se solapen y choquen al hacer push
+concurrency:
+  group: scrape-yapo
+  cancel-in-progress: false
+
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 340       # deja margen bajo el limite de 6h de GitHub
+    timeout-minutes: 330       # deja margen bajo el limite de 6h de GitHub
     steps:
       - uses: actions/checkout@v4
 
@@ -23,9 +28,12 @@ jobs:
         run: pip install requests
 
       - name: Scrapear Yapo (objetivo acumulado 25000)
+        env:
+          MAX_MINUTES: '290'     # el scraper se detiene solo y guarda antes del timeout del job
         run: python scripts/scraper_yapo.py 25000
 
       - name: Commitear datos nuevos
+        if: always()             # commitea el progreso aunque el paso anterior falle o se corte
         run: |
           git config user.name "scraper-bot"
           git config user.email "actions@users.noreply.github.com"

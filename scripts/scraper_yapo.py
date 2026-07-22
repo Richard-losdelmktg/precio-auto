@@ -7,7 +7,7 @@ Rutas permitidas por robots.txt de yapo.cl (verificado 2026-07-21):
 NO usa /ajax/ ni /chile-es/* (prohibidos por robots.txt).
 Rate limit: >=1.2s entre requests. Incremental: reanuda sin repetir avisos.
 """
-import json, re, sys, time
+import json, os, re, sys, time
 from datetime import datetime, timezone
 from pathlib import Path
 import requests
@@ -76,6 +76,13 @@ def parse_ad(html, ad_id, url):
     }
 
 def scrape(target=12000, max_pages=1148):
+    # Presupuesto de tiempo (min): al superarlo el scraper se detiene y guarda,
+    # para que el paso de commit del workflow alcance a correr antes del limite
+    # de 6h de GitHub. La corrida siguiente continua desde el checkpoint.
+    budget_min = float(os.environ.get("MAX_MINUTES", "0"))
+    deadline = time.time() + budget_min * 60 if budget_min > 0 else None
+    def out_of_time(): return deadline is not None and time.time() >= deadline
+
     s = requests.Session()
     results, done = [], set()
     if OUT_PATH.exists():
@@ -103,6 +110,7 @@ def scrape(target=12000, max_pages=1148):
 
     ad_urls, page, empty, scanned = {}, start_page, 0, 0
     while scanned <= max_pages and len(done) + len(ad_urls) < target * 1.15:
+        if out_of_time(): log("Presupuesto de tiempo agotado en Fase 1"); break
         u = f"{BASE}/autos-usados.{page}" if page > 1 else f"{BASE}/autos-usados"
         h = get(u, s)
         if not h:
@@ -129,6 +137,9 @@ def scrape(target=12000, max_pages=1148):
     # Fase 2: detalle de cada aviso
     for i, (aid, url) in enumerate(ad_urls.items(), 1):
         if len(results) >= target: break
+        if out_of_time():
+            save(); log(f"Presupuesto de tiempo agotado en Fase 2 — guardado parcial ({len(results)})")
+            return
         h = get(url, s)
         if h:
             row = parse_ad(h, aid, url)
