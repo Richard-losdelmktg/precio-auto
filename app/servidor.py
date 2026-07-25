@@ -3,21 +3,28 @@ Servidor local del estimador de precios.
   python app/entrenar.py    (una vez, genera modelo.pkl)
   python app/servidor.py    -> http://localhost:5000
 """
-import pickle, unicodedata, re
+import pickle, sys
 from pathlib import Path
 import numpy as np, pandas as pd
 from flask import Flask, request, jsonify, render_template
 
 APP = Path(__file__).resolve().parent
+sys.path.insert(0, str(APP))
+from matching import resolver
+
 with open(APP/'modelo.pkl','rb') as f: M = pickle.load(f)
 app = Flask(__name__, template_folder=str(APP/'templates'))
 
 CAT_VER = M['cat_ver']; REF = M['ref'].set_index(['mk','md','yr'])
 REF_MD  = M['ref_md'].set_index(['mk','md']); DENS = M['dens']; DENS_MD = M['dens_md']
 
-def norm(s):
-    s = ''.join(c for c in unicodedata.normalize('NFD', str(s)) if unicodedata.category(c)!='Mn')
-    return re.sub(r'\s+',' ', re.sub(r'[^a-z0-9 ]',' ', s.lower())).strip()
+# indice marca -> modelos del SII, para resolver igual que en el entrenamiento
+MODELOS_POR_MARCA = {}
+for a, b in zip(CAT_VER['mk'], CAT_VER['md']): MODELOS_POR_MARCA.setdefault(a, set()).add(b)
+
+def resolver_sii(marca, modelo):
+    mk, md = resolver(marca, modelo, MODELOS_POR_MARCA)
+    return mk, (md or '')
 
 def fmt(v): return f"${v:,.0f}".replace(',','.')
 
@@ -28,9 +35,10 @@ def index():
 @app.route('/versiones')
 def versiones():
     """Versiones oficiales del SII para ese marca+modelo+año (opción B)."""
-    mk, md = norm(request.args.get('marca','')), norm(request.args.get('modelo','')).split(' ')[0]
+    mk, md = resolver_sii(request.args.get('marca',''), request.args.get('modelo',''))
     try: yr = int(request.args.get('ano'))
     except (TypeError, ValueError): return jsonify([])
+    if not md: return jsonify([])
     sub = CAT_VER[(CAT_VER.mk==mk)&(CAT_VER.md==md)&(CAT_VER.yr==yr)]
     if sub.empty:   # sin año exacto, ofrecer las del modelo
         sub = CAT_VER[(CAT_VER.mk==mk)&(CAT_VER.md==md)]
@@ -46,7 +54,7 @@ def estimar():
     except (KeyError, TypeError, ValueError):
         return jsonify({'error':'Datos incompletos o inválidos'}), 400
 
-    mk, md = norm(marca), norm(modelo).split(' ')[0]
+    mk, md = resolver_sii(marca, modelo)
     ant = 2026 - ano
 
     # Referencia SII. Si el usuario eligió una versión, se usa ESA tasación

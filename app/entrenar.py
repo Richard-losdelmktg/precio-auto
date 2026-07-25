@@ -13,12 +13,14 @@ Pipeline v3:
 Ejecutar: python app/entrenar.py
 """
 import warnings; warnings.filterwarnings('ignore')
-import json, pickle, re, unicodedata
+import json, pickle, re, sys, unicodedata
 from pathlib import Path
 import numpy as np, pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import r2_score
 import lightgbm as lgb
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from matching import resolver, marca_sii  # cruce robusto con el catalogo SII
 
 BASE = Path(__file__).resolve().parent.parent / 'data'
 OUT  = Path(__file__).resolve().parent / 'modelo.pkl'
@@ -62,11 +64,10 @@ def clean(df):
     df['antiguedad'] = 2026 - df['Ano'].astype(int)
     df['Marca'] = df['Marca'].str.strip().str.title().replace(MARCA_FIX)
     df['Modelo'] = df['Modelo'].str.strip().str.title()
-    df['mk'] = df['Marca'].map(norm)
-    df['md'] = df['Modelo'].map(norm).str.split().str[0]
+    df = df[df['Modelo'].str.strip().ne('') & df['Modelo'].ne('--')]
     df['yr'] = df['Ano'].astype(int)
     df['km_ano'] = df['Kilometraje']/(df['antiguedad']+1)
-    return df[['Marca','Modelo','mk','md','yr','antiguedad','Kilometraje','km_ano',
+    return df[['Marca','Modelo','yr','antiguedad','Kilometraje','km_ano',
                'Combustible','Transmision','price']]
 
 # ------------------------------------------------- catalogo oficial del SII
@@ -107,7 +108,17 @@ print('Cargando avisos...')
 orig = clean(pd.read_csv(BASE/'datos_combinados_entrega2.csv'))
 yapo = clean(pd.DataFrame(json.loads((BASE/'datos_scraped_yapo.json').read_text(encoding='utf-8'))))
 full = pd.concat([orig, yapo], ignore_index=True).drop_duplicates(
-    subset=['mk','md','yr','Kilometraje','price']).reset_index(drop=True)
+    subset=['Marca','Modelo','yr','Kilometraje','price']).reset_index(drop=True)
+
+# Resolver cada aviso contra el catalogo SII (alias de marca + cascada de modelo).
+# Un cruce ingenuo por primer token fallaba en 15% de los avisos; esto lo baja a ~4%.
+modelos_por_marca = {}
+for a, b in zip(sii['mk'], sii['md']): modelos_por_marca.setdefault(a, set()).add(b)
+print('Cruzando avisos con catálogo SII...')
+pares = [resolver(a, b, modelos_por_marca) for a, b in zip(full['Marca'], full['Modelo'])]
+full['mk'] = [p[0] for p in pares]
+full['md'] = [p[1] if p[1] else '' for p in pares]
+print(f'  match marca+modelo: {(full["md"]!="").mean()*100:.1f}%')
 
 full = full.merge(ref, on=['mk','md','yr'], how='left').merge(ref_md, on=['mk','md'], how='left')
 full['sii_any']   = full['sii_tas'].fillna(full['sii_tas_md'])
