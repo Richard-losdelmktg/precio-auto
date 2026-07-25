@@ -97,6 +97,56 @@ Lectura: la mitad de las predicciones tiene error ≤11.4%. El MAPE de 18% está
 **Por qué:** liberar al usuario de mantener su PC prendido días enteros. El scraper ya era incremental/reanudable, lo que encaja naturalmente con ejecuciones programadas cortas en vez de un proceso continuo.
 **Efecto:** scraping ahora corre solo, sin depender de la máquina local. Pendiente: push del repo con este workflow para que se active.
 
+## Cambio 10 — Se elimina el filtro que borraba el mercado premium
+
+**Qué se hizo:** quitar el filtro IQR sobre el **precio** (se mantiene sobre kilometraje).
+**Por qué:** ese filtro —heredado del pipeline académico— cortaba el techo del mercado en $24,7M y borraba del entrenamiento a Porsche (61 de 83 avisos), Land Rover (78 de 152), Tesla (12 de 12). El modelo nunca veía un auto sobre $24M, así que no podía tasarlo: de ahí las estimaciones de $15M para autos de $30M.
+**Efecto:** errores catastróficos eliminados. Premium (≥$25M): 15,6% → 13,4% de error mediano.
+
+## Cambio 11 — Catálogo oficial del SII (versiones y valor de referencia)
+
+**Qué se hizo:** integrar la **Tasación Fiscal de Vehículos del SII** (`scripts/descargar_sii.py`): 81.611 tasaciones, 18.425 versiones, con marca, modelo, **versión**, cilindrada, potencia, tracción y valor fiscal. Público, gratuito y sin restricción de uso.
+**Por qué:** era la variable que faltaba y que no se podía extraer del texto de los avisos. El SII la entrega estructurada.
+**Efecto:** premium 16,3% → 13,4%. Además el catálogo alimenta el **selector de versión** de la interfaz: un RAV4 2018 pasa de $12,6M (STD) a $15,7M (LIMITED) — $3,1M que el modelo antes no veía.
+
+## Cambio 12 — Normalización del cruce con el SII
+
+**Qué se hizo:** `app/matching.py` — alias de marca y cascada de formas del modelo.
+**Por qué:** el SII escribe los nombres distinto y el cruce ingenuo perdía casos completos: KIA (el SII la llama *KIA MOTORS*, 4.063 avisos), `L 200`→`l200`, `BT-50`→`bt50`, `Mazda 3`→`mazda3`, `C180`→ modelo `c` + versión `180`.
+**Efecto:** match marca+modelo 84,8% → **98,2%**; avisos con referencia SII 79% → **94%**. Premium 13,4% → **12,1%**.
+
+## Cambio 13 — Rango adaptativo y señal de confianza
+
+**Qué se hizo:** el rango se ensancha cuando el modelo-año tiene muchas versiones y no se especificó cuál, y se angosta al especificarla. Cada estimación reporta confianza **alta / media / baja** según cuántos avisos comparables existen; los casos flacos se marcan como *"requiere tasación manual"*.
+**Por qué:** con datos públicos hay un piso de error irreducible. Un sistema que falla sin avisar destruye la confianza del tasador; uno que reconoce sus límites es utilizable.
+
+## Validación temporal (avisos nuevos, nunca vistos por el modelo)
+
+`app/validar_frescos.py` toma avisos publicados **después** del entrenamiento y evalúa sobre ellos. Sobre 39 avisos frescos:
+
+| Grupo | n | Error mediano | Precio real dentro del rango |
+|---|---|---|---|
+| Confianza alta | 20 | **8,1%** | 95% |
+| Confianza media | 13 | **7,5%** | 92% |
+| Confianza baja | 6 | 45,1% | 50% |
+| **Todos** | 39 | **10,3%** | 87% |
+
+**Conclusiones:**
+1. **No hay degradación**: 10,3% en avisos nuevos = 10,3% en el test interno.
+2. **La señal de confianza funciona**: el 85% de los casos se resuelve automáticamente con ~8% de error; el 15% restante se deriva a tasación manual en vez de entregar un número inventado.
+3. La señal no es perfecta — se escaparon un furgón Peugeot Partner (−20%) y un DS 7 (−54%) marcados con confianza suficiente.
+
+## Estado actual del modelo
+
+| Métrica | Valor |
+|---|---|
+| Avisos de entrenamiento | 37.968 |
+| Error mediano global | 10,3% |
+| Error con confianza alta/media | **~8%** |
+| Premium (≥$25M) | 12,1% (era 16,3%) |
+| Cobertura del rango | 80% |
+| Cobertura del catálogo SII | 94% |
+
 ## Pendientes (requieren re-scrapear — próxima etapa)
 
 1. **Versión/trim** (la mejora de mayor impacto disponible): la URL de Chileautos ya la contiene (ej: `santa-fe-2-2-crdi-auto-plus`). El scraper actual ya guarda `url`, `Tipo_de_vendedor`, `Category` y `scraped_at` — pero solo hay ~200 registros con ese detalle vs 32.000 sin él. Hay que correr el scraper a volumen.

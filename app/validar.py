@@ -1,79 +1,42 @@
+"""Valida el modelo contra avisos reales cargados a mano en validacion.csv.
+Consulta el servidor local (mismo camino que usa la interfaz).
+  python app/servidor.py     (en otra consola)
+  python app/validar.py
 """
-Banco de pruebas contra avisos reales (Chileautos u otra fuente).
-
-Uso:
-  1. Llena app/validacion.csv con avisos reales que mires en el sitio.
-  2. python app/validar.py
-
-Reporta, por auto y en conjunto, si el precio publicado cae dentro del rango
-estimado y cuanto se desvia del valor central. Sirve para validar el modelo con
-datos que NO vienen del entrenamiento.
-
-Nota: los avisos se copian a mano mirando el sitio como cualquier usuario.
-No hay scraping automatizado de fuentes que no lo permitan.
-"""
-import pickle, sys
+import csv, json, sys, urllib.request
 from pathlib import Path
-import numpy as np, pandas as pd
 
-APP = Path(__file__).resolve().parent
-CSV = APP / 'validacion.csv'
+API = 'http://127.0.0.1:5000/estimar'
+CSV = Path(__file__).resolve().parent / 'validacion.csv'
 
-with open(APP / 'modelo.pkl', 'rb') as f:
-    M = pickle.load(f)
+def pedir(fila):
+    body = json.dumps({
+        'marca': fila['marca'], 'modelo': fila['modelo'], 'ano': fila['ano'],
+        'kilometraje': fila['kilometraje'], 'combustible': fila['combustible'],
+        'transmision': fila['transmision'], 'precio': fila['precio_publicado'],
+    }).encode()
+    req = urllib.request.Request(API, data=body, headers={'Content-Type':'application/json'})
+    return json.load(urllib.request.urlopen(req, timeout=30))
 
-if not CSV.exists():
-    print(f'Falta {CSV}. Crealo con las columnas:')
-    print('  marca,modelo,ano,kilometraje,combustible,transmision,precio_publicado')
-    sys.exit(1)
-
-df = pd.read_csv(CSV)
-req = ['marca','modelo','ano','kilometraje','combustible','transmision','precio_publicado']
-faltan = [c for c in req if c not in df.columns]
-if faltan:
-    print('Faltan columnas en el CSV:', faltan); sys.exit(1)
-
-X = pd.DataFrame({
-    'antiguedad': 2026 - df['ano'].astype(int),
-    'Kilometraje': df['kilometraje'].astype(float),
-    'Marca': df['marca'].astype(str).str.strip().str.title(),
-    'Modelo': df['modelo'].astype(str).str.strip().str.title(),
-    'Combustible': df['combustible'].astype(str).str.strip().str.title(),
-    'Transmision': df['transmision'].astype(str).str.strip().str.title(),
-})[M['FEATS']]
-for c in M['CATS']:
-    X[c] = X[c].astype(M['cat_dtypes'][c])
-
-# Avisa si algun valor no existe en el vocabulario del modelo (quedaria como NaN)
-for c in M['CATS']:
-    desconocidos = df.index[X[c].isna()].tolist()
-    if desconocidos:
-        vals = [str(df.loc[i, c.lower()]) for i in desconocidos]
-        print(f'AVISO: valores de {c} no vistos en entrenamiento -> {set(vals)}')
-
-p50 = np.expm1(M['mmid'].predict(X))
-lo  = np.expm1(M['mlo'].predict(X) - M['qhat'])
-hi  = np.expm1(M['mhi'].predict(X) + M['qhat'])
-real = df['precio_publicado'].astype(float).values
-
-err = (p50 - real) / real * 100
-dentro = (real >= lo) & (real <= hi)
-
-def M_(v): return f'${v/1e6:.1f}M'
-print(f'\n{"AUTO":34s} {"PUBLICADO":>10s} {"ESTIMADO":>10s} {"RANGO":>18s} {"ERROR":>8s}  EN RANGO')
-print('-'*98)
-for i in range(len(df)):
-    nombre = f"{df.loc[i,'marca']} {df.loc[i,'modelo']} {int(df.loc[i,'ano'])}"
-    print(f'{nombre:34s} {M_(real[i]):>10s} {M_(p50[i]):>10s} '
-          f'{M_(lo[i])+" - "+M_(hi[i]):>18s} {err[i]:+7.1f}%  {"si" if dentro[i] else "NO"}')
-
-ape = np.abs(err)
-print('-'*98)
-print(f'\nRESUMEN sobre {len(df)} autos reales:')
-print(f'  Error mediano (MdAPE)      : {np.median(ape):.1f}%')
-print(f'  Dentro de ±10%             : {(ape<=10).mean()*100:.0f}%')
-print(f'  Precio real dentro del rango: {dentro.mean()*100:.0f}%   (esperado ~80%)')
-print(f'  Sesgo medio                : {err.mean():+.1f}%  '
-      f'({"sobreestima" if err.mean()>0 else "subestima"} en promedio)')
-if len(df) < 25:
-    print(f'\n  OJO: con {len(df)} autos el resultado es indicativo. Apunta a 30-50 para concluir.')
+filas = list(csv.DictReader(open(CSV, encoding='utf-8')))
+print(f'\n{"AUTO":30s} {"REAL":>11s} {"ESTIMADO":>11s} {"RANGO":>25s} {"ERROR":>8s} {"OK":>4s}  CONFIANZA')
+print('-'*112)
+errs, dentro = [], 0
+for f in filas:
+    try: d = pedir(f)
+    except Exception as e:
+        print(f'{f["marca"]} {f["modelo"]}: error {e}'); continue
+    real = float(f['precio_publicado'])
+    err = (d['p50'] - real)/real*100
+    ok = d.get('estado') == 'PRECIO JUSTO'
+    errs.append(err); dentro += ok
+    nombre = f"{f['marca']} {f['modelo']} {f['ano']}"
+    rango = f"{d['lo_txt']} - {d['hi_txt']}"
+    print(f'{nombre:30s} {"$"+f"{real/1e6:.1f}M":>11s} {"$"+f"{d["p50"]/1e6:.1f}M":>11s} '
+          f'{rango:>25s} {err:+7.1f}% {"si" if ok else "NO":>4s}  {d["conf"]}')
+print('-'*112)
+if errs:
+    a = sorted(abs(e) for e in errs)
+    med = a[len(a)//2] if len(a)%2 else (a[len(a)//2-1]+a[len(a)//2])/2
+    print(f'\n{len(errs)} autos | error mediano {med:.1f}% | dentro del rango {dentro}/{len(errs)} '
+          f'({dentro/len(errs)*100:.0f}%) | sesgo medio {sum(errs)/len(errs):+.1f}%')
