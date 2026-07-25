@@ -31,18 +31,25 @@ def limpiar_transmision(v):
     if 'auto' in v or 'cvt' in v or 'tiptronic' in v: return 'Automatica'
     return np.nan
 
+# Consolidacion de variantes de nombre de marca (estaban fragmentando los datos)
+MARCA_FIX = {'Mercedes':'Mercedes-Benz', 'Mercedes Benz':'Mercedes-Benz',
+             'Citroën':'Citroen', 'Range Rover':'Land Rover', 'Vw':'Volkswagen'}
+
 def clean(df):
     df = df.copy()
     for c in ['Ano','Kilometraje','price']: df[c] = pd.to_numeric(df[c], errors='coerce')
     df['Combustible'] = df['Combustible'].apply(limpiar_combustible)
     df['Transmision'] = df['Transmision'].apply(limpiar_transmision)
     df = df.dropna(subset=['Marca','Modelo','Ano','Kilometraje','price','Transmision','Combustible'])
-    for c in ['price','Kilometraje']:
-        q1,q3 = df[c].quantile(.25), df[c].quantile(.75); iqr=q3-q1
-        df = df[(df[c]>=q1-1.5*iqr)&(df[c]<=q3+1.5*iqr)]
-    df = df[(df['price']>500000)&(df['Ano']>=1990)&(df['Ano']<=2026)&(df['Kilometraje']>0)]
+    # Kilometraje: el IQR si aplica (los km absurdos son errores de carga)
+    q1,q3 = df['Kilometraje'].quantile([.25,.75]); iqr = q3-q1
+    df = df[(df['Kilometraje']>=q1-1.5*iqr)&(df['Kilometraje']<=q3+1.5*iqr)]
+    # Precio: NO se filtra por IQR. Ese filtro borraba todo el mercado sobre $24M
+    # (Porsche, Land Rover, Tesla) y el modelo quedaba incapaz de tasarlos.
+    df = df[(df['price']>500000)&(df['price']<150_000_000)]
+    df = df[(df['Ano']>=1990)&(df['Ano']<=2026)&(df['Kilometraje']>0)]
     df['antiguedad'] = 2026 - df['Ano'].astype(int)
-    df['Marca'] = df['Marca'].str.strip().str.title()
+    df['Marca'] = df['Marca'].str.strip().str.title().replace(MARCA_FIX)
     df['Modelo'] = df['Modelo'].str.strip().str.title()
     return df[['Marca','Modelo','antiguedad','Kilometraje','Combustible','Transmision','price']]
 
