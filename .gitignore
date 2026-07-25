@@ -17,3 +17,6 @@ Thumbs.db
 # Logs de scraping (locales, no forman parte del dataset)
 data/scrape_log.txt
 data/scrape_yapo_log.txt
+
+# Catalogo SII (7MB, se descarga con: python scripts/descargar_sii.py)
+data/sii_liv2026.xlsx

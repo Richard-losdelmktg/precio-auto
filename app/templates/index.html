@@ -38,6 +38,10 @@
   .bajo  { background:rgba(58,160,255,.15); color:var(--bajo);  border:1px solid var(--bajo); }
   .alto  { background:rgba(255,92,108,.15); color:var(--alto);  border:1px solid var(--alto); }
   .foot { text-align:center; color:var(--mut); font-size:11px; margin-top:10px; }
+  .conf { text-align:center; font-size:12px; padding:8px; border-radius:8px; margin-top:10px; }
+  .c-alta  { background:rgba(46,204,113,.12); color:var(--justo); }
+  .c-media { background:rgba(255,193,7,.14);  color:#ffc107; }
+  .c-baja  { background:rgba(255,92,108,.14); color:var(--alto); }
 </style>
 </head>
 <body>
@@ -70,6 +74,8 @@
         <select id="transmision">{% for t in op.transmisiones %}<option>{{t}}</option>{% endfor %}</select>
       </div>
     </div>
+    <label>Versión <span style="color:var(--acc)">(catálogo SII — mejora bastante la estimación)</span></label>
+    <select id="version"><option value="">— no especificada —</option></select>
     <label>Precio publicado / ofrecido (opcional — para clasificar)</label>
     <input id="precio" type="number" placeholder="Ej: 8500000">
     <button onclick="estimar()">Estimar precio</button>
@@ -80,6 +86,7 @@
     <div class="barra"><div class="fill" id="fill"></div><div class="p50dot" id="dot"></div></div>
     <div class="ends"><span id="lo"></span><span id="hi"></span></div>
     <div class="rango"><span class="lbl">rango estimado de mercado</span></div>
+    <div id="conf" class="conf"></div>
     <div id="estado"></div>
   </div>
   <div class="foot">Herramienta de apoyo a la tasación. El valor final requiere inspección del vehículo.</div>
@@ -94,9 +101,29 @@ function cargarModelos() {
   modeloSel.innerHTML = '';
   (MODELOS[marcaSel.value] || []).forEach(m => modeloSel.add(new Option(m, m)));
 }
-marcaSel.onchange = cargarModelos;
+marcaSel.onchange = () => { cargarModelos(); cargarVersiones(); };
+modeloSel.onchange = cargarVersiones;
+document.getElementById('ano').onchange = cargarVersiones;
 marcaSel.value = 'Toyota' in MODELOS ? 'Toyota' : marcaSel.options[0].value;
 cargarModelos();
+
+// Opcion B: versiones oficiales del catalogo SII para ese marca+modelo+año
+async function cargarVersiones() {
+  const vs = document.getElementById('version');
+  vs.innerHTML = '<option value="">— no especificada —</option>';
+  const q = new URLSearchParams({marca: marcaSel.value, modelo: modeloSel.value,
+                                 ano: document.getElementById('ano').value});
+  try {
+    const r = await fetch('/versiones?' + q);
+    const d = await r.json();
+    d.forEach(o => {
+      const op = new Option(o.v + '  (fiscal ' + (o.tas/1e6).toFixed(1) + 'M)', o.tas);
+      vs.add(op);
+    });
+    vs.parentElement.style.opacity = d.length ? 1 : .5;
+  } catch (e) {}
+}
+cargarVersiones();
 
 async function estimar() {
   const body = {
@@ -106,6 +133,7 @@ async function estimar() {
     combustible: document.getElementById('combustible').value,
     transmision: document.getElementById('transmision').value,
     precio: document.getElementById('precio').value,
+    tasacion_version: document.getElementById('version').value,
   };
   const r = await fetch('/estimar', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
   const d = await r.json();
@@ -118,6 +146,9 @@ async function estimar() {
   document.getElementById('fill').style.left = '0%';
   document.getElementById('fill').style.width = '100%';
   document.getElementById('dot').style.left = pct + '%';
+  const cf = document.getElementById('conf');
+  cf.className = 'conf c-' + d.conf;
+  cf.textContent = 'Confianza ' + d.conf + ' · ' + d.conf_txt + (d.sii_txt ? ' · ref. fiscal SII ' + d.sii_txt : '');
   const est = document.getElementById('estado');
   if (d.estado) {
     est.className = 'estado ' + d.clase;
